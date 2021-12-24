@@ -128,6 +128,8 @@ func main() {
 		plaidEnv = plaid.Development
 	case "production":
 		plaidEnv = plaid.Production
+	case "sandbox":
+		plaidEnv = plaid.Sandbox
 	default:
 		log.Fatalln("Invalid plaid environment. Valid plaid environments are 'development' or 'production'.")
 	}
