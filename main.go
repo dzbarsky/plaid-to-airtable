@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/landakram/plaid-cli/pkg/plaid_cli"
 	"github.com/manifoldco/promptui"
@@ -378,6 +379,51 @@ func main() {
 	transactionsCommand.Flags().StringVarP(&outputFormat, "output-format", "o", "json", "Output format")
 	transactionsCommand.Flags().StringVarP(&accountID, "account-id", "a", "", "Fetch transactions for this account ID only.")
 
+	airtableSyncCommand := &cobra.Command{
+		Use:   "sync-transactions [ITEM-ID-OR-ALIAS]",
+		Short: "Sync transactions for a given institution",
+		Args:  cobra.ExactArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			itemOrAlias := args[0]
+			itemID, ok := data.Aliases[itemOrAlias]
+			if ok {
+				itemOrAlias = itemID
+			}
+
+			err := WithRelinkOnAuthError(itemOrAlias, data, linker, func() error {
+				token := data.Tokens[itemOrAlias]
+
+				var accountIDs []string
+				if len(accountID) > 0 {
+					accountIDs = append(accountIDs, accountID)
+				}
+
+				layout := "2006-01-02"
+				now := time.Now()
+				start := now.AddDate(-2, 0, 0)
+				options := plaid.GetTransactionsOptions{
+					StartDate:  start.Format(layout),
+					EndDate:    now.Format(layout),
+					AccountIDs: accountIDs,
+					Count:      100,
+					Offset:     0,
+				}
+
+				transactions, err := AllTransactions(options, client, token)
+				fmt.Println(transactions)
+				if err != nil {
+					return err
+				}
+
+				return Sync(transactions)
+			})
+
+			if err != nil {
+				log.Fatalln(err)
+			}
+		},
+	}
+
 	var withStatusFlag bool
 	var withOptionalMetadataFlag bool
 	insitutionCommand := &cobra.Command{
@@ -476,6 +522,7 @@ Configuration:
 	rootCommand.AddCommand(aliasesCommand)
 	rootCommand.AddCommand(accountsCommand)
 	rootCommand.AddCommand(transactionsCommand)
+	rootCommand.AddCommand(airtableSyncCommand)
 	rootCommand.AddCommand(insitutionCommand)
 
 	if !viper.IsSet("plaid.client_id") {
