@@ -5,10 +5,7 @@ import (
 	"github.com/brianloveswords/airtable"
 	"github.com/plaid/plaid-go/plaid"
 	"os"
-	_ "time"
 )
-
-var _ = fmt.Println
 
 type TransactionFields struct {
 	PlaidID      string
@@ -63,7 +60,6 @@ func Sync(transactions []plaid.Transaction) error {
 		}, Typecast: true}
 	}
 	plaidArranged := byAccountIDbyTransactionID(plaidTransactions)
-	fmt.Println(plaidArranged)
 
 	var airtableTransactions []TransactionRecord
 	err := expenses.List(&airtableTransactions, &airtable.Options{})
@@ -72,7 +68,6 @@ func Sync(transactions []plaid.Transaction) error {
 	}
 
 	airtableArranged := byAccountIDbyTransactionID(airtableTransactions)
-	fmt.Println(airtableArranged)
 
 	for accountID, transactions := range plaidArranged {
 		updates := updateAccount(transactions, airtableArranged[accountID])
@@ -82,7 +77,7 @@ func Sync(transactions []plaid.Transaction) error {
 			if err != nil {
 				return err
 			}
-			fmt.Printf("Created %d/%d transactions\n", i, len(updates.ToCreate))
+			fmt.Printf("Created %d/%d transactions\n", i + 1, len(updates.ToCreate))
 		}
 
 		for _, t := range updates.ToUpdate {

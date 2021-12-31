@@ -385,41 +385,57 @@ func main() {
 		Args:  cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
 			itemOrAlias := args[0]
-			itemID, ok := data.Aliases[itemOrAlias]
-			if ok {
-				itemOrAlias = itemID
+
+			var itemIDs []string
+
+			if itemOrAlias == "all" {
+				for _, itemID := range data.Aliases {
+					itemIDs = append(itemIDs, itemID)
+				}
+			} else {
+				itemID, ok := data.Aliases[itemOrAlias]
+				if ok {
+					itemOrAlias = itemID
+				}
+				itemIDs = append(itemIDs, itemOrAlias)
 			}
 
-			err := WithRelinkOnAuthError(itemOrAlias, data, linker, func() error {
-				token := data.Tokens[itemOrAlias]
-
-				var accountIDs []string
-				if len(accountID) > 0 {
-					accountIDs = append(accountIDs, accountID)
+			for _, itemID := range itemIDs {
+				if itemID == "7jKq173RmNfQyGvRnw6XFxQjKVlo8DcgjdEMJ" {
+					// Sandbox item
+					continue
 				}
+				fmt.Println("Syncing ", itemID)
+				err := WithRelinkOnAuthError(itemID, data, linker, func() error {
+					token := data.Tokens[itemID]
 
-				layout := "2006-01-02"
-				now := time.Now()
-				start := now.AddDate(-2, 0, 0)
-				options := plaid.GetTransactionsOptions{
-					StartDate:  start.Format(layout),
-					EndDate:    now.Format(layout),
-					AccountIDs: accountIDs,
-					Count:      100,
-					Offset:     0,
-				}
+					var accountIDs []string
+					if len(accountID) > 0 {
+						accountIDs = append(accountIDs, accountID)
+					}
 
-				transactions, err := AllTransactions(options, client, token)
-				fmt.Println(transactions)
+					layout := "2006-01-02"
+					now := time.Now()
+					start := now.AddDate(-2, 0, 0)
+					options := plaid.GetTransactionsOptions{
+						StartDate:  start.Format(layout),
+						EndDate:    now.Format(layout),
+						AccountIDs: accountIDs,
+						Count:      100,
+						Offset:     0,
+					}
+
+					transactions, err := AllTransactions(options, client, token)
+					if err != nil {
+						return err
+					}
+
+					return Sync(transactions)
+				})
+
 				if err != nil {
-					return err
+					log.Fatalln(err)
 				}
-
-				return Sync(transactions)
-			})
-
-			if err != nil {
-				log.Fatalln(err)
 			}
 		},
 	}
