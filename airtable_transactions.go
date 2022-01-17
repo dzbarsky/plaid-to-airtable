@@ -9,17 +9,17 @@ import (
 
 type TransactionFields struct {
 	PlaidID      string
-	AccountID    string
+	// Used to dedupe, not for human consumption
+	AccountID    string `json:"AccountIDDedupe"`
+	AccountIDLink airtable.RecordLink `json:"AccountID"`
 	Amount       float64
 	Name         string
 	MerchantName string
 	Pending      bool
 	DateTime     string
-	Category1   string
-	Category2   string
-	Category3   string
-	Category12  airtable.MultiSelect
-	Category123 airtable.MultiSelect
+	PlaidCategory1   string
+	PlaidCategory2   string
+	PlaidCategory3   string
 }
 
 type TransactionRecord struct {
@@ -31,10 +31,10 @@ type TransactionRecord struct {
 func Sync(transactions []plaid.Transaction) error {
 	client := airtable.Client{
 		APIKey: os.Getenv("AIRTABLE_KEY"),
-		BaseID: "appe5OMMgxrJhsr2U",
+		BaseID: "appxCfKnRz94NZadj",
 	}
 
-	expenses := client.Table("Credit Card Expenses")
+	transactionsTable := client.Table("Transactions")
 
 	plaidTransactions := make([]TransactionRecord, len(transactions))
 	for i, t := range transactions {
@@ -47,52 +47,44 @@ func Sync(transactions []plaid.Transaction) error {
 		plaidTransactions[i] = TransactionRecord{Fields: TransactionFields{
 			PlaidID:      t.ID,
 			AccountID:    t.AccountID,
+			AccountIDLink:    airtable.RecordLink{t.AccountID},
 			Amount:       t.Amount,
 			Name:         t.Name,
 			MerchantName: t.MerchantName,
 			Pending:      t.Pending,
 			DateTime:     t.Date,
-			Category1:    s(t.Category, 0),
-			Category2:    s(t.Category, 1),
-			Category3:    s(t.Category, 2),
-			Category12:   t.Category[:2],
-			Category123:  t.Category,
+			PlaidCategory1:    s(t.Category, 0),
+			PlaidCategory2:    s(t.Category, 1),
+			PlaidCategory3:    s(t.Category, 2),
 		}, Typecast: true}
+		plaidTransactions[i].ID = t.ID
 	}
 	plaidArranged := byAccountIDbyTransactionID(plaidTransactions)
 
 	var airtableTransactions []TransactionRecord
-	err := expenses.List(&airtableTransactions, &airtable.Options{})
+	err := transactionsTable.List(&airtableTransactions, &airtable.Options{})
 	if err != nil {
 		return err
 	}
-
 	airtableArranged := byAccountIDbyTransactionID(airtableTransactions)
 
 	for accountID, transactions := range plaidArranged {
 		updates := updateAccount(transactions, airtableArranged[accountID])
 
+		// Update is delete + create
+		for _, t := range updates.ToDelete {
+			err := transactionsTable.Delete(&t)
+			if err != nil {
+				return err
+			}
+		}
+
 		for i, t := range updates.ToCreate {
-			err := expenses.Create(&t)
+			err := transactionsTable.Create(&t)
 			if err != nil {
 				return err
 			}
 			fmt.Printf("Created %d/%d transactions\n", i + 1, len(updates.ToCreate))
-		}
-
-		for _, t := range updates.ToUpdate {
-			fmt.Println(t)
-			err := expenses.Update(&t)
-			if err != nil {
-				return err
-			}
-		}
-
-		for _, t := range updates.ToDelete {
-			err := expenses.Delete(&t)
-			if err != nil {
-				return err
-			}
 		}
 	}
 
@@ -114,7 +106,6 @@ func byAccountIDbyTransactionID(ts []TransactionRecord) map[string]map[string]Tr
 
 type AccountUpdate struct {
 	ToCreate []TransactionRecord
-	ToUpdate []TransactionRecord
 	ToDelete []TransactionRecord
 }
 
@@ -126,10 +117,11 @@ func updateAccount(plaidTs, airtableTs map[string]TransactionRecord) AccountUpda
 		existing, ok := airtableTs[id]
 		if !ok {
 			u.ToCreate = append(u.ToCreate, t)
-		} else if false { //existing.Fields != t.Fields {
-			_ = existing
-			// TODO: make update work
-			u.ToUpdate = append(u.ToUpdate, t)
+		} else if existing.Fields.Pending != t.Fields.Pending {
+			u.ToCreate = append(u.ToCreate, t)
+			// Need to use the linked record ID to make deletion work correctly.
+			t.ID = existing.ID
+			u.ToDelete = append(u.ToDelete, t)
 		}
 	}
 

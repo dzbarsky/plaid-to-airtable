@@ -286,31 +286,52 @@ func main() {
 		Args:  cobra.ExactArgs(1),
 		Run: func(cmd *cobra.Command, args []string) {
 			itemOrAlias := args[0]
-			itemID, ok := data.Aliases[itemOrAlias]
-			if ok {
-				itemOrAlias = itemID
+
+			var itemIDs []string
+
+			if itemOrAlias == "all" {
+				for _, itemID := range data.Aliases {
+					itemIDs = append(itemIDs, itemID)
+				}
+			} else {
+				itemID, ok := data.Aliases[itemOrAlias]
+				if ok {
+					itemOrAlias = itemID
+				}
+				itemIDs = append(itemIDs, itemOrAlias)
 			}
 
-			err := WithRelinkOnAuthError(itemOrAlias, data, linker, func() error {
-				token := data.Tokens[itemOrAlias]
-				res, err := client.GetAccounts(token)
-				if err != nil {
-					return err
+			for _, itemID := range itemIDs {
+				if itemID == "7jKq173RmNfQyGvRnw6XFxQjKVlo8DcgjdEMJ" {
+					// Sandbox item
+					continue
 				}
+				err = WithRelinkOnAuthError(itemID, data, linker, func() error {
+					token := data.Tokens[itemID]
+					res, err := client.GetAccounts(token)
+					if err != nil {
+						return err
+					}
 
-				b, err := json.MarshalIndent(res.Accounts, "", "  ")
+					err = SyncAccounts(res.Accounts)
+					if err != nil {
+						return err
+					}
+
+					b, err := json.MarshalIndent(res.Accounts, "", "  ")
+					if err != nil {
+						return err
+					}
+
+					fmt.Println(string(b))
+
+					return nil
+				})
 				if err != nil {
-					return err
+					log.Fatalln(err)
 				}
-
-				fmt.Println(string(b))
-
-				return nil
-			})
-
-			if err != nil {
-				log.Fatalln(err)
 			}
+
 		},
 	}
 
