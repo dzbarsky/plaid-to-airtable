@@ -5,6 +5,7 @@ import (
 	"github.com/brianloveswords/airtable"
 	"github.com/plaid/plaid-go/plaid"
 	"os"
+	"time"
 )
 
 type TransactionFields struct {
@@ -125,9 +126,17 @@ func updateAccount(plaidTs, airtableTs map[string]TransactionRecord) AccountUpda
 		}
 	}
 
+	cutoff := time.Now().AddDate(0, -1, 0)
 	for id, t := range airtableTs {
 		if _, ok := ids[id]; !ok {
-			u.ToDelete = append(u.ToDelete, t)
+			transactionTime, err := time.Parse("2006-01-02", t.Fields.DateTime)
+			if err != nil {
+				panic(err)
+			}
+			if transactionTime.After(cutoff) {
+				fmt.Println("Deleting", t)
+				u.ToDelete = append(u.ToDelete, t)
+			}
 		}
 	}
 	return u
