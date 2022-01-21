@@ -10,6 +10,7 @@ import (
 type AccountFields struct {
 	AccountID    string
 	Name         string
+	Mask		string
 }
 
 type AccountRecord struct {
@@ -34,6 +35,7 @@ func SyncAccounts(accounts []plaid.Account) error {
 		plaidAccounts[i] = AccountRecord{Fields: AccountFields{
 			AccountID:    a.AccountID,
 			Name:         name,
+			Mask: a.Mask,
 		}}
 	}
 
