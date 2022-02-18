@@ -21,6 +21,7 @@ type TransactionFields struct {
 	PlaidCategory1   string
 	PlaidCategory2   string
 	PlaidCategory3   string
+	Address string
 }
 
 type TransactionRecord struct {
@@ -45,6 +46,7 @@ func Sync(transactions []plaid.Transaction) error {
 			}
 			return tags[n]
 		}
+		address := t.Location.Address + " " + t.Location.City
 		plaidTransactions[i] = TransactionRecord{Fields: TransactionFields{
 			PlaidID:      t.ID,
 			AccountID:    t.AccountID,
@@ -57,6 +59,7 @@ func Sync(transactions []plaid.Transaction) error {
 			PlaidCategory1:    s(t.Category, 0),
 			PlaidCategory2:    s(t.Category, 1),
 			PlaidCategory3:    s(t.Category, 2),
+			Address: address,
 		}, Typecast: true}
 		plaidTransactions[i].ID = t.ID
 	}
@@ -87,6 +90,14 @@ func Sync(transactions []plaid.Transaction) error {
 			}
 			fmt.Printf("Created %d/%d transactions\n", i + 1, len(updates.ToCreate))
 		}
+
+		for i, t := range updates.ToUpdate {
+			err := transactionsTable.Update(&t)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("Updated %d/%d transactions\n", i + 1, len(updates.ToUpdate))
+		}
 	}
 
 	return nil
@@ -108,6 +119,7 @@ func byAccountIDbyTransactionID(ts []TransactionRecord) map[string]map[string]Tr
 type AccountUpdate struct {
 	ToCreate []TransactionRecord
 	ToDelete []TransactionRecord
+	ToUpdate []TransactionRecord
 }
 
 func updateAccount(plaidTs, airtableTs map[string]TransactionRecord) AccountUpdate {
@@ -118,11 +130,10 @@ func updateAccount(plaidTs, airtableTs map[string]TransactionRecord) AccountUpda
 		existing, ok := airtableTs[id]
 		if !ok {
 			u.ToCreate = append(u.ToCreate, t)
-		} else if existing.Fields.Pending != t.Fields.Pending {
-			u.ToCreate = append(u.ToCreate, t)
-			// Need to use the linked record ID to make deletion work correctly.
+		} else if existing.Fields.Pending != t.Fields.Pending ||
+		        existing.Fields.Address != t.Fields.Address {
 			t.ID = existing.ID
-			u.ToDelete = append(u.ToDelete, t)
+			u.ToUpdate = append(u.ToUpdate, t)
 		}
 	}
 
