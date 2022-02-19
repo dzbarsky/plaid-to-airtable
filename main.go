@@ -421,12 +421,13 @@ func main() {
 				itemIDs = append(itemIDs, itemOrAlias)
 			}
 
+			var allTransactions []plaid.Transaction
 			for _, itemID := range itemIDs {
 				if itemID == "7jKq173RmNfQyGvRnw6XFxQjKVlo8DcgjdEMJ" {
 					// Sandbox item
 					continue
 				}
-				fmt.Println("Syncing ", itemID)
+				fmt.Println("Downloading transactions for ", itemID)
 				err := WithRelinkOnAuthError(itemID, data, linker, func() error {
 					token := data.Tokens[itemID]
 
@@ -450,13 +451,19 @@ func main() {
 					if err != nil {
 						return err
 					}
-
-					return Sync(transactions)
+					allTransactions = append(allTransactions, transactions...)
+					return nil
 				})
 
 				if err != nil {
 					log.Fatalln(err)
 				}
+			}
+
+			fmt.Println("Syncing all transactions")
+			err := Sync(allTransactions)
+			if err != nil {
+				log.Fatalln(err)
 			}
 		},
 	}
