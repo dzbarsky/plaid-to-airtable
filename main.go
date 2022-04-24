@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/landakram/plaid-cli/pkg/plaid_cli"
@@ -422,47 +423,64 @@ func main() {
 				items = append(items, idAndAlias{itemID, itemOrAlias})
 			}
 
+			var transactionsMu sync.Mutex
 			var allTransactions []plaid.Transaction
+
+			var wg sync.WaitGroup
+
 			for _, item := range items {
 				if item.id == "7jKq173RmNfQyGvRnw6XFxQjKVlo8DcgjdEMJ" {
 					// Sandbox item
 					continue
 				}
-				fmt.Println("Downloading transactions for ", item)
-				err := WithRelinkOnAuthError(item.id, data, linker, func() error {
-					token := data.Tokens[item.id]
+				wg.Add(1)
+				go func(item idAndAlias) {
+					defer wg.Done()
+					fmt.Println("Downloading transactions for ", item)
+					err := WithRelinkOnAuthError(item.id, data, linker, func() error {
+						token := data.Tokens[item.id]
 
-					var accountIDs []string
-					if len(accountID) > 0 {
-						accountIDs = append(accountIDs, accountID)
-					}
+						var accountIDs []string
+						if len(accountID) > 0 {
+							accountIDs = append(accountIDs, accountID)
+						}
 
-					layout := "2006-01-02"
-					now := time.Now()
-					start := now.AddDate(-2, 0, 0)
-					options := plaid.GetTransactionsOptions{
-						StartDate:  start.Format(layout),
-						EndDate:    now.Format(layout),
-						AccountIDs: accountIDs,
-						Count:      100,
-						Offset:     0,
-					}
+						layout := "2006-01-02"
+						now := time.Now()
+						start := now.AddDate(-2, 0, 0)
+						options := plaid.GetTransactionsOptions{
+							StartDate:  start.Format(layout),
+							EndDate:    now.Format(layout),
+							AccountIDs: accountIDs,
+							Count:      100,
+							Offset:     0,
+						}
 
-					transactions, err := AllTransactions(options, client, token)
+						transactions, err := AllTransactions(options, client, token)
+						if err != nil {
+							return err
+						}
+						transactionsMu.Lock()
+						allTransactions = append(allTransactions, transactions...)
+						transactionsMu.Unlock()
+						return nil
+					})
+
 					if err != nil {
-						return err
+						log.Fatalln(err)
 					}
-					allTransactions = append(allTransactions, transactions...)
-					return nil
-				})
-
-				if err != nil {
-					log.Fatalln(err)
-				}
+				}(item)
 			}
 
+			airtableTransactions, err := FetchAirtableTransactions()
+			if err != nil {
+				log.Fatalln(err)
+			}
+
+			wg.Wait()
+
 			fmt.Println("Syncing all transactions")
-			err := Sync(allTransactions)
+			err = Sync(allTransactions, airtableTransactions)
 			if err != nil {
 				log.Fatalln(err)
 			}

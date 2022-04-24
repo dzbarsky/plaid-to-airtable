@@ -2,10 +2,12 @@ package main
 
 import (
 	"fmt"
-	"github.com/brianloveswords/airtable"
-	"github.com/plaid/plaid-go/plaid"
+	"log"
 	"os"
 	"time"
+
+	"github.com/brianloveswords/airtable"
+	"github.com/plaid/plaid-go/plaid"
 )
 
 type TransactionFields struct {
@@ -30,7 +32,22 @@ type TransactionRecord struct {
 	Typecast bool
 }
 
-func Sync(transactions []plaid.Transaction) error {
+func FetchAirtableTransactions() ([]TransactionRecord, error) {
+	log.Println("Fetching airtable transactions...")
+	client := airtable.Client{
+		APIKey: os.Getenv("AIRTABLE_KEY"),
+		BaseID: "appxCfKnRz94NZadj",
+	}
+
+	transactionsTable := client.Table("Transactions")
+
+	var airtableTransactions []TransactionRecord
+	err := transactionsTable.List(&airtableTransactions, &airtable.Options{})
+	log.Println("Fetched airtable transactions")
+	return airtableTransactions, err
+}
+
+func Sync(transactions []plaid.Transaction, airtableTransactions []TransactionRecord) error {
 	client := airtable.Client{
 		APIKey: os.Getenv("AIRTABLE_KEY"),
 		BaseID: "appxCfKnRz94NZadj",
@@ -63,13 +80,8 @@ func Sync(transactions []plaid.Transaction) error {
 		}, Typecast: true}
 		plaidTransactions[i].ID = t.ID
 	}
-	plaidArranged := byAccountIDbyTransactionID(plaidTransactions)
 
-	var airtableTransactions []TransactionRecord
-	err := transactionsTable.List(&airtableTransactions, &airtable.Options{})
-	if err != nil {
-		return err
-	}
+	plaidArranged := byAccountIDbyTransactionID(plaidTransactions)
 	airtableArranged := byAccountIDbyTransactionID(airtableTransactions)
 
 	for accountID, transactions := range plaidArranged {
