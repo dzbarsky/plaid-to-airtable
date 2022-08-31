@@ -27,6 +27,8 @@ import (
 	"golang.org/x/text/language"
 )
 
+type idAndAlias struct { id, alias string }
+
 func sliceToMap(slice []string) map[string]bool {
 	set := make(map[string]bool, len(slice))
 	for _, s := range slice {
@@ -307,7 +309,7 @@ func main() {
 					// Sandbox item
 					continue
 				}
-				err = WithRelinkOnAuthError(itemID, data, linker, func() error {
+				err = WithRelinkOnAuthError(idAndAlias{id: itemID}, data, linker, func() error {
 					token := data.Tokens[itemID]
 					res, err := client.GetAccounts(token)
 					if err != nil {
@@ -351,7 +353,7 @@ func main() {
 				itemOrAlias = itemID
 			}
 
-			err := WithRelinkOnAuthError(itemOrAlias, data, linker, func() error {
+			err := WithRelinkOnAuthError(idAndAlias{id: itemOrAlias}, data, linker, func() error {
 				token := data.Tokens[itemOrAlias]
 
 				var accountIDs []string
@@ -408,7 +410,6 @@ func main() {
 		Run: func(cmd *cobra.Command, args []string) {
 			itemOrAlias := args[0]
 
-			type idAndAlias struct { id, alias string }
 			var items []idAndAlias
 
 			if itemOrAlias == "all" {
@@ -437,7 +438,7 @@ func main() {
 				go func(item idAndAlias) {
 					defer wg.Done()
 					fmt.Println("Downloading transactions for ", item)
-					err := WithRelinkOnAuthError(item.id, data, linker, func() error {
+					err := WithRelinkOnAuthError(item, data, linker, func() error {
 						token := data.Tokens[item.id]
 
 						var accountIDs []string
@@ -467,7 +468,7 @@ func main() {
 					})
 
 					if err != nil {
-						log.Fatalln(err)
+						log.Println(item, err)
 					}
 				}(item)
 			}
@@ -501,7 +502,7 @@ func main() {
 				itemOrAlias = itemID
 			}
 
-			err := WithRelinkOnAuthError(itemOrAlias, data, linker, func() error {
+			err := WithRelinkOnAuthError(idAndAlias{id: itemOrAlias}, data, linker, func() error {
 				token := data.Tokens[itemOrAlias]
 
 				itemResp, err := client.GetItem(token)
@@ -626,15 +627,15 @@ func AllTransactions(opts plaid.GetTransactionsOptions, client *plaid.Client, to
 	return transactions, nil
 }
 
-func WithRelinkOnAuthError(itemID string, data *plaid_cli.Data, linker *plaid_cli.Linker, action func() error) error {
+func WithRelinkOnAuthError(item idAndAlias, data *plaid_cli.Data, linker *plaid_cli.Linker, action func() error) error {
 	err := action()
 	if e, ok := err.(plaid.Error); ok {
 		if e.ErrorCode == "ITEM_LOGIN_REQUIRED" {
-			log.Println("Login expired. Relinking...")
+			log.Printf("Login expired for %s. Relinking...\n", item.alias)
 
 			port := viper.GetString("link.port")
 
-			err = linker.Relink(itemID, port)
+			err = linker.Relink(item.id, port)
 
 			if err != nil {
 				return err
