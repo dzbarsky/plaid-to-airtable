@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sync"
 	"text/template"
 
 	"github.com/plaid/plaid-go/plaid"
@@ -20,6 +21,8 @@ type Linker struct {
 	Data          *Data
 	countries     []string
 	lang          string
+
+	mu sync.Mutex
 }
 
 type TokenPair struct {
@@ -28,6 +31,10 @@ type TokenPair struct {
 }
 
 func (l *Linker) Relink(itemID string, port string) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	log.Println("Starting relink server for %s", itemID)
 	token := l.Data.Tokens[itemID]
 	hostname, err := os.Hostname()
 	if err != nil {

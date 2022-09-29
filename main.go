@@ -631,7 +631,7 @@ func WithRelinkOnAuthError(item idAndAlias, data *plaid_cli.Data, linker *plaid_
 	err := action()
 	if e, ok := err.(plaid.Error); ok {
 		if e.ErrorCode == "ITEM_LOGIN_REQUIRED" {
-			log.Printf("Login expired for %s. Relinking...\n", item.alias)
+			log.Printf("Login expired for %s (%s). Relinking...\n", item.alias, item.id)
 
 			port := viper.GetString("link.port")
 
