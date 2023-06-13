@@ -290,30 +290,34 @@ func main() {
 		Run: func(cmd *cobra.Command, args []string) {
 			itemOrAlias := args[0]
 
-			var itemIDs []string
+			var items []idAndAlias
 
 			if itemOrAlias == "all" {
-				for _, itemID := range data.Aliases {
-					itemIDs = append(itemIDs, itemID)
+				for alias, itemID := range data.Aliases {
+					if !strings.Contains(alias, "albert") {
+						items = append(items, idAndAlias{itemID, alias})
+					}
 				}
 			} else {
 				itemID, ok := data.Aliases[itemOrAlias]
-				if ok {
-					itemOrAlias = itemID
+				if !ok {
+					panic("Unknown alias")
 				}
-				itemIDs = append(itemIDs, itemOrAlias)
+				items = append(items, idAndAlias{itemID, itemOrAlias})
 			}
 
-			for _, itemID := range itemIDs {
-				if itemID == "7jKq173RmNfQyGvRnw6XFxQjKVlo8DcgjdEMJ" {
+			for _, item := range items {
+				if item.id == "7jKq173RmNfQyGvRnw6XFxQjKVlo8DcgjdEMJ" {
 					// Sandbox item
 					continue
 				}
-				err = WithRelinkOnAuthError(idAndAlias{id: itemID}, data, linker, func() error {
-					token := data.Tokens[itemID]
+				err = WithRelinkOnAuthError(idAndAlias{id: item.id}, data, linker, func() error {
+					fmt.Println("Syncing accounts for ", item)
+					token := data.Tokens[item.id]
 					res, err := client.GetAccounts(token)
 					if err != nil {
-						return err
+						log.Println(item, err)
+						return nil
 					}
 
 					err = SyncAccounts(res.Accounts)
@@ -414,7 +418,9 @@ func main() {
 
 			if itemOrAlias == "all" {
 				for alias, itemID := range data.Aliases {
-					items = append(items, idAndAlias{itemID, alias})
+					if !strings.Contains(alias, "albert") {
+						items = append(items, idAndAlias{itemID, alias})
+					}
 				}
 			} else {
 				itemID, ok := data.Aliases[itemOrAlias]
