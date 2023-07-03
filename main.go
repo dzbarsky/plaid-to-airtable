@@ -179,14 +179,14 @@ func main() {
 			} else {
 				tokenPair, err = linker.Link(port)
 				if err != nil {
-					log.Fatalln(err)
+					log.Fatalln("Cannot link", err)
 				}
 				data.Tokens[tokenPair.ItemID] = tokenPair.AccessToken
 				err = data.Save()
 			}
 
 			if err != nil {
-				log.Fatalln(err)
+				log.Fatalln("Cannot save", err)
 			}
 
 			log.Println("Institution linked!")
@@ -230,7 +230,7 @@ func main() {
 		},
 	}
 
-	linkCommand.Flags().StringP("port", "p", "8080", "Port on which to serve Plaid Link")
+	linkCommand.Flags().StringP("port", "p", "9090", "Port on which to serve Plaid Link")
 	viper.BindPFlag("link.port", linkCommand.Flags().Lookup("port"))
 
 	tokensCommand := &cobra.Command{
@@ -294,7 +294,7 @@ func main() {
 
 			if itemOrAlias == "all" {
 				for alias, itemID := range data.Aliases {
-					if !strings.Contains(alias, "albert") {
+					if !strings.Contains(alias, "albert") && !strings.HasSuffix(alias, "citi") {
 						items = append(items, idAndAlias{itemID, alias})
 					}
 				}
@@ -418,7 +418,7 @@ func main() {
 
 			if itemOrAlias == "all" {
 				for alias, itemID := range data.Aliases {
-					if !strings.Contains(alias, "albert") {
+					if !strings.Contains(alias, "albert") && !strings.HasSuffix(alias, "citi") && !strings.Contains(alias, "citizen") {
 						items = append(items, idAndAlias{itemID, alias})
 					}
 				}
@@ -488,6 +488,23 @@ func main() {
 
 			fmt.Println("Syncing all transactions")
 			err = Sync(allTransactions, airtableTransactions)
+			if err != nil {
+				log.Fatalln(err)
+			}
+		},
+	}
+
+	airtableFixCommand := &cobra.Command{
+		Use:   "fix-airtable", 
+		Short: "Fix duplicate airtable transactions",
+		Run: func(cmd *cobra.Command, args []string) {
+			airtableTransactions, err := FetchAirtableTransactions()
+			if err != nil {
+				log.Fatalln(err)
+			}
+
+			fmt.Println("Syncing all transactions")
+			err = FixAT(airtableTransactions)
 			if err != nil {
 				log.Fatalln(err)
 			}
@@ -593,6 +610,7 @@ Configuration:
 	rootCommand.AddCommand(accountsCommand)
 	rootCommand.AddCommand(transactionsCommand)
 	rootCommand.AddCommand(airtableSyncCommand)
+	rootCommand.AddCommand(airtableFixCommand)
 	rootCommand.AddCommand(insitutionCommand)
 
 	if !viper.IsSet("plaid.client_id") {

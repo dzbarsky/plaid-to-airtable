@@ -24,6 +24,8 @@ type TransactionFields struct {
 	PlaidCategory2   string
 	PlaidCategory3   string
 	Address string
+	CategoryLookup airtable.RecordLink
+	//CategoryLookup
 }
 
 type TransactionRecord struct {
@@ -164,3 +166,73 @@ func updateAccount(plaidTs, airtableTs map[string]TransactionRecord) AccountUpda
 	}
 	return u
 }
+
+func FixAT(airtableTransactions []TransactionRecord) error {
+	client := airtable.Client{
+		APIKey: os.Getenv("AIRTABLE_KEY"),
+		BaseID: "appxCfKnRz94NZadj",
+	}
+
+	transactionsTable := client.Table("Transactions")
+	_ = transactionsTable
+
+	airtableArranged := make(map[string]map[string][]TransactionRecord)
+	for _, t := range airtableTransactions {
+		byAmount, ok := airtableArranged[t.Fields.DateTime]
+		if !ok {
+			byAmount = make(map[string][]TransactionRecord)
+			airtableArranged[t.Fields.DateTime] = byAmount
+		}
+		key := fmt.Sprintf("%v%s", t.Fields.Amount, t.Fields.Name)
+		byAmount[key] = append(byAmount[key], t)
+	}
+
+	for _, dateTs := range airtableArranged {
+		for _, amountTs := range dateTs {
+			if len(amountTs) == 1 {
+				fmt.Println("ok")
+			} else if len(amountTs) == 2 {
+				fmt.Println(amountTs[0].Fields.CategoryLookup, amountTs[0].Fields.AccountID, amountTs[0].Fields.AccountIDLink, amountTs[0])
+				fmt.Println(amountTs[1].Fields.CategoryLookup, amountTs[1].Fields.AccountID, amountTs[1].Fields.AccountIDLink, amountTs[1])
+			} else {
+				fmt.Println("fuck")
+				for _, a := range amountTs {
+					fmt.Println(a.Fields.AccountID, a.Fields.AccountIDLink, a)
+				}
+				//panic(fmt.Sprintf("fuck", len(amountTs)))
+			}
+		}
+	}
+
+	/*for accountID, transactions := range plaidArranged {
+		updates := updateAccount(transactions, airtableArranged[accountID])
+
+		// Update is delete + create
+		for _, t := range updates.ToDelete {
+			err := transactionsTable.Delete(&t)
+			if err != nil {
+				return err
+			}
+		}
+
+		for i, t := range updates.ToCreate {
+			err := transactionsTable.Create(&t)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("Created %d/%d transactions\n", i + 1, len(updates.ToCreate))
+		}
+
+		for i, t := range updates.ToUpdate {
+			err := transactionsTable.Update(&t)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("Updated %d/%d transactions\n", i + 1, len(updates.ToUpdate))
+		}
+	}*/
+
+	return nil
+}
+
+
