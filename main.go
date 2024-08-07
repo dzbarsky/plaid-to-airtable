@@ -2,12 +2,12 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
-	"net/http"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -18,16 +18,13 @@ import (
 
 	"github.com/landakram/plaid-cli/pkg/plaid_cli"
 	"github.com/manifoldco/promptui"
-	"github.com/plaid/plaid-go/plaid"
+	"github.com/plaid/plaid-go/v27/plaid"
 	"github.com/spf13/cobra"
 
 	"github.com/spf13/viper"
-
-	"github.com/Xuanwo/go-locale"
-	"golang.org/x/text/language"
 )
 
-type idAndAlias struct { id, alias string }
+type idAndAlias struct{ id, alias string }
 
 func sliceToMap(slice []string) map[string]bool {
 	set := make(map[string]bool, len(slice))
@@ -88,70 +85,14 @@ func main() {
 	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_", ".", "_"))
 	viper.AutomaticEnv()
 
-	tag, err := locale.Detect()
-	if err != nil {
-		tag = language.AmericanEnglish
-	}
+	cfg := plaid.NewConfiguration()
+	cfg.AddDefaultHeader("PLAID-CLIENT-ID", viper.GetString("plaid.client_id"))
+	cfg.AddDefaultHeader("PLAID-SECRET", viper.GetString("plaid.secret"))
+	cfg.UseEnvironment(plaid.Production)
+	client := plaid.NewAPIClient(cfg)
 
-	region, _ := tag.Region()
-	base, _ := tag.Base()
-
-	var country string
-	if region.IsCountry() {
-		country = region.String()
-	} else {
-		country = "US"
-	}
-
-	lang := base.String()
-
-	viper.SetDefault("plaid.countries", []string{country})
-	countriesOpt := viper.GetStringSlice("plaid.countries")
-	var countries []string
-	for _, c := range countriesOpt {
-		countries = append(countries, strings.ToUpper(c))
-	}
-
-	viper.SetDefault("plaid.language", lang)
-	lang = viper.GetString("plaid.language")
-
-	if !AreValidCountries(countries) {
-		log.Fatalln("⚠️  Invalid countries. Please configure `plaid.countries` (using an envvar, PLAID_COUNTRIES, or in plaid-cli's config file) to a subset of countries that Plaid supports. Plaid supports the following countries: ", plaidSupportedCountries)
-	}
-
-	if !IsValidLanguageCode(lang) {
-		log.Fatalln("⚠️  Invalid language code. Please configure `plaid.language` (using an envvar, PLAID_LANGUAGE, or in plaid-cli's config file) to a language that Plaid supports. Plaid supports the following languages: ", plaidSupportedLanguages)
-	}
-
-	viper.SetDefault("plaid.environment", "development")
-	plaidEnvStr := strings.ToLower(viper.GetString("plaid.environment"))
-
-	var plaidEnv plaid.Environment
-	switch plaidEnvStr {
-	case "development":
-		plaidEnv = plaid.Development
-	case "production":
-		plaidEnv = plaid.Production
-	case "sandbox":
-		plaidEnv = plaid.Sandbox
-	default:
-		log.Fatalln("Invalid plaid environment. Valid plaid environments are 'development' or 'production'.")
-	}
-
-	opts := plaid.ClientOptions{
-		viper.GetString("plaid.client_id"),
-		viper.GetString("plaid.secret"),
-		plaidEnv,
-		&http.Client{},
-	}
-
-	client, err := plaid.NewClient(opts)
-
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	linker := plaid_cli.NewLinker(data, client, countries, lang)
+	ctx := context.Background()
+	linker := plaid_cli.NewLinker(data, client, []plaid.CountryCode{"US"}, "en")
 
 	linkCommand := &cobra.Command{
 		Use:   "link [ITEM-ID-OR-ALIAS]",
@@ -173,11 +114,14 @@ func main() {
 					itemOrAlias = itemID
 				}
 
-				err = linker.Relink(itemOrAlias, port)
+				err = linker.Relink(ctx, itemOrAlias, port)
+				if err != nil {
+					log.Fatalln("Cannot relink", err)
+				}
 				log.Println("Institution relinked!")
 				return
 			} else {
-				tokenPair, err = linker.Link(port)
+				tokenPair, err = linker.Link(ctx, port)
 				if err != nil {
 					log.Fatalln("Cannot link", err)
 				}
@@ -294,9 +238,7 @@ func main() {
 
 			if itemOrAlias == "all" {
 				for alias, itemID := range data.Aliases {
-					if !strings.Contains(alias, "albert") && !strings.HasSuffix(alias, "citi") {
-						items = append(items, idAndAlias{itemID, alias})
-					}
+					items = append(items, idAndAlias{itemID, alias})
 				}
 			} else {
 				itemID, ok := data.Aliases[itemOrAlias]
@@ -311,10 +253,12 @@ func main() {
 					// Sandbox item
 					continue
 				}
-				err = WithRelinkOnAuthError(idAndAlias{id: item.id}, data, linker, func() error {
+				err = WithRelinkOnAuthError(ctx, idAndAlias{id: item.id}, data, linker, func() error {
 					fmt.Println("Syncing accounts for ", item)
 					token := data.Tokens[item.id]
-					res, err := client.GetAccounts(token)
+					res, _, err := client.PlaidApi.AccountsGet(ctx).AccountsGetRequest(plaid.AccountsGetRequest{
+						AccessToken: token,
+					}).Execute()
 					if err != nil {
 						log.Println(item, err)
 						return nil
@@ -357,7 +301,7 @@ func main() {
 				itemOrAlias = itemID
 			}
 
-			err := WithRelinkOnAuthError(idAndAlias{id: itemOrAlias}, data, linker, func() error {
+			err := WithRelinkOnAuthError(ctx, idAndAlias{id: itemOrAlias}, data, linker, func() error {
 				token := data.Tokens[itemOrAlias]
 
 				var accountIDs []string
@@ -365,15 +309,16 @@ func main() {
 					accountIDs = append(accountIDs, accountID)
 				}
 
-				options := plaid.GetTransactionsOptions{
-					StartDate:  fromFlag,
-					EndDate:    toFlag,
-					AccountIDs: accountIDs,
-					Count:      100,
-					Offset:     0,
+				options := plaid.NewTransactionsGetRequestOptions()
+				options.SetAccountIds(accountIDs)
+				req := plaid.TransactionsGetRequest{
+					StartDate:   fromFlag,
+					EndDate:     toFlag,
+					Options:     options,
+					AccessToken: token,
 				}
 
-				transactions, err := AllTransactions(options, client, token)
+				transactions, err := AllTransactions(ctx, req, client)
 				if err != nil {
 					return err
 				}
@@ -418,9 +363,7 @@ func main() {
 
 			if itemOrAlias == "all" {
 				for alias, itemID := range data.Aliases {
-					if !strings.Contains(alias, "albert") && !strings.HasSuffix(alias, "citi") && !strings.Contains(alias, "citizen") {
-						items = append(items, idAndAlias{itemID, alias})
-					}
+					items = append(items, idAndAlias{itemID, alias})
 				}
 			} else {
 				itemID, ok := data.Aliases[itemOrAlias]
@@ -444,7 +387,7 @@ func main() {
 				go func(item idAndAlias) {
 					defer wg.Done()
 					fmt.Println("Downloading transactions for ", item)
-					err := WithRelinkOnAuthError(item, data, linker, func() error {
+					err := WithRelinkOnAuthError(ctx, item, data, linker, func() error {
 						token := data.Tokens[item.id]
 
 						var accountIDs []string
@@ -454,19 +397,34 @@ func main() {
 
 						layout := "2006-01-02"
 						now := time.Now()
-						start := now.AddDate(-2, 0, 0)
-						options := plaid.GetTransactionsOptions{
-							StartDate:  start.Format(layout),
-							EndDate:    now.Format(layout),
-							AccountIDs: accountIDs,
-							Count:      100,
-							Offset:     0,
+						start := time.Date(2024, time.May, 24, 0, 0, 0, 0, time.Local)
+						if item.alias == "citi" {
+							start = time.Date(2023, time.August, 1, 0, 0, 0, 0, time.Local)
 						}
 
-						transactions, err := AllTransactions(options, client, token)
+						options := plaid.NewTransactionsGetRequestOptions()
+						options.SetAccountIds(accountIDs)
+						req := plaid.TransactionsGetRequest{
+							StartDate:   start.Format(layout),
+							EndDate:     now.Format(layout),
+							Options:     options,
+							AccessToken: token,
+						}
+
+						transactions, err := AllTransactions(ctx, req, client)
 						if err != nil {
 							return err
 						}
+
+						/*data, err := json.Marshal(transactions)
+						if err != nil {
+							return err
+						}
+						err = os.WriteFile("/tmp/citi.json", data, 0777)
+						if err != nil {
+							return err
+						}*/
+
 						transactionsMu.Lock()
 						allTransactions = append(allTransactions, transactions...)
 						transactionsMu.Unlock()
@@ -494,8 +452,49 @@ func main() {
 		},
 	}
 
+	unlinkCommand := &cobra.Command{
+		Use:   "unlink [ITEM-ID-OR-ALIAS]",
+		Short: "Unlink given institution",
+		Args:  cobra.ExactArgs(1),
+		Run: func(cmd *cobra.Command, args []string) {
+			itemOrAlias := args[0]
+
+			var items []idAndAlias
+
+			if itemOrAlias == "all" {
+				for alias, itemID := range data.Aliases {
+					items = append(items, idAndAlias{itemID, alias})
+				}
+			} else {
+				itemID, ok := data.Aliases[itemOrAlias]
+				if !ok {
+					panic("Unknown alias")
+				}
+				items = append(items, idAndAlias{itemID, itemOrAlias})
+			}
+
+			for _, item := range items {
+				_, _, err := client.PlaidApi.ItemRemove(ctx).ItemRemoveRequest(plaid.ItemRemoveRequest{
+					AccessToken: data.Tokens[item.id],
+				}).Execute()
+
+				if err != nil {
+					log.Fatal("Could not unlink", item, err)
+				}
+
+				delete(data.Aliases, item.alias)
+				delete(data.BackAliases, item.id)
+				delete(data.Tokens, item.id)
+				err = data.Save()
+				if err != nil {
+					log.Println(item, err)
+				}
+			}
+		},
+	}
+
 	airtableFixCommand := &cobra.Command{
-		Use:   "fix-airtable", 
+		Use:   "fix-airtable",
 		Short: "Fix duplicate airtable transactions",
 		Run: func(cmd *cobra.Command, args []string) {
 			airtableTransactions, err := FetchAirtableTransactions()
@@ -525,15 +524,17 @@ func main() {
 				itemOrAlias = itemID
 			}
 
-			err := WithRelinkOnAuthError(idAndAlias{id: itemOrAlias}, data, linker, func() error {
+			err := WithRelinkOnAuthError(ctx, idAndAlias{id: itemOrAlias}, data, linker, func() error {
 				token := data.Tokens[itemOrAlias]
 
-				itemResp, err := client.GetItem(token)
+				_, _, err := client.PlaidApi.ItemGet(ctx).ItemGetRequest(plaid.ItemGetRequest{
+					AccessToken: token,
+				}).Execute()
 				if err != nil {
 					return err
 				}
 
-				instID := itemResp.Item.InstitutionID
+				/*instID := itemResp.Item.InstitutionId
 
 				opts := plaid.GetInstitutionByIDOptions{
 					IncludeOptionalMetadata: withOptionalMetadataFlag,
@@ -549,7 +550,7 @@ func main() {
 					return err
 				}
 
-				fmt.Println(string(b))
+				fmt.Println(string(b))*/
 
 				return nil
 			})
@@ -612,6 +613,7 @@ Configuration:
 	rootCommand.AddCommand(airtableSyncCommand)
 	rootCommand.AddCommand(airtableFixCommand)
 	rootCommand.AddCommand(insitutionCommand)
+	rootCommand.AddCommand(unlinkCommand)
 
 	if !viper.IsSet("plaid.client_id") {
 		log.Println("⚠️  PLAID_CLIENT_ID not set. Please see the configuration instructions below.")
@@ -627,19 +629,19 @@ Configuration:
 	rootCommand.Execute()
 }
 
-func AllTransactions(opts plaid.GetTransactionsOptions, client *plaid.Client, token string) ([]plaid.Transaction, error) {
+func AllTransactions(ctx context.Context, req plaid.TransactionsGetRequest, client *plaid.APIClient) ([]plaid.Transaction, error) {
 	var transactions []plaid.Transaction
 
-	res, err := client.GetTransactionsWithOptions(token, opts)
+	res, _, err := client.PlaidApi.TransactionsGet(ctx).TransactionsGetRequest(req).Execute()
 	if err != nil {
 		return transactions, err
 	}
 
 	transactions = append(transactions, res.Transactions...)
 
-	for len(transactions) < res.TotalTransactions {
-		opts.Offset += opts.Count
-		res, err := client.GetTransactionsWithOptions(token, opts)
+	for len(transactions) < int(res.TotalTransactions) {
+		req.Options.SetOffset(*req.Options.Offset + *req.Options.Count)
+		res, _, err := client.PlaidApi.TransactionsGet(ctx).TransactionsGetRequest(req).Execute()
 		if err != nil {
 			return transactions, err
 		}
@@ -651,24 +653,23 @@ func AllTransactions(opts plaid.GetTransactionsOptions, client *plaid.Client, to
 	return transactions, nil
 }
 
-func WithRelinkOnAuthError(item idAndAlias, data *plaid_cli.Data, linker *plaid_cli.Linker, action func() error) error {
+func WithRelinkOnAuthError(ctx context.Context, item idAndAlias, data *plaid_cli.Data, linker *plaid_cli.Linker, action func() error) error {
 	err := action()
-	if e, ok := err.(plaid.Error); ok {
-		if e.ErrorCode == "ITEM_LOGIN_REQUIRED" {
-			log.Printf("Login expired for %s (%s). Relinking...\n", item.alias, item.id)
+	e, _ := plaid.ToPlaidError(err)
+	if e.ErrorCode == "ITEM_LOGIN_REQUIRED" {
+		log.Printf("Login expired for %s (%s). Relinking...\n", item.alias, item.id)
 
-			port := viper.GetString("link.port")
+		port := viper.GetString("link.port")
 
-			err = linker.Relink(item.id, port)
+		err = linker.Relink(ctx, item.id, port)
 
-			if err != nil {
-				return err
-			}
-
-			log.Println("Re-running action...")
-
-			err = action()
+		if err != nil {
+			return err
 		}
+
+		log.Println("Re-running action...")
+
+		err = action()
 	}
 
 	return err

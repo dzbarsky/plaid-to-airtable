@@ -7,23 +7,23 @@ import (
 	"time"
 
 	"github.com/brianloveswords/airtable"
-	"github.com/plaid/plaid-go/plaid"
+	"github.com/plaid/plaid-go/v27/plaid"
 )
 
 type TransactionFields struct {
-	PlaidID      string
+	PlaidID string
 	// Used to dedupe, not for human consumption
-	AccountID    string `json:"AccountIDDedupe"`
-	AccountIDLink airtable.RecordLink `json:"AccountID"`
-	Amount       float64
-	Name         string
-	MerchantName string
-	Pending      bool
-	DateTime     string
-	PlaidCategory1   string
-	PlaidCategory2   string
-	PlaidCategory3   string
-	Address string
+	AccountID      string              `json:"AccountIDDedupe"`
+	AccountIDLink  airtable.RecordLink `json:"AccountID"`
+	Amount         float64
+	Name           string
+	MerchantName   string
+	Pending        bool
+	DateTime       string
+	PlaidCategory1 string
+	PlaidCategory2 string
+	PlaidCategory3 string
+	Address        string
 	CategoryLookup airtable.RecordLink
 	//CategoryLookup
 }
@@ -44,11 +44,19 @@ func FetchAirtableTransactions() ([]TransactionRecord, error) {
 	transactionsTable := client.Table("Transactions")
 
 	var airtableTransactions []TransactionRecord
-	err := transactionsTable.List(&airtableTransactions, &airtable.Options{})
+	err := transactionsTable.List(&airtableTransactions, &airtable.Options{
+		Filter: "{After Plaid Issues} = 1",
+	})
 	log.Println("Fetched airtable transactions")
 	return airtableTransactions, err
 }
 
+func val(s plaid.NullableString) string {
+	if !s.IsSet() {
+		return ""
+	}
+	return *s.Get()
+}
 func Sync(transactions []plaid.Transaction, airtableTransactions []TransactionRecord) error {
 	client := airtable.Client{
 		APIKey: os.Getenv("AIRTABLE_KEY"),
@@ -65,22 +73,22 @@ func Sync(transactions []plaid.Transaction, airtableTransactions []TransactionRe
 			}
 			return tags[n]
 		}
-		address := t.Location.Address + " " + t.Location.City
+		address := val(t.Location.Address) + " " + val(t.Location.City)
 		plaidTransactions[i] = TransactionRecord{Fields: TransactionFields{
-			PlaidID:      t.ID,
-			AccountID:    t.AccountID,
-			AccountIDLink:    airtable.RecordLink{t.AccountID},
-			Amount:       t.Amount,
-			Name:         t.Name,
-			MerchantName: t.MerchantName,
-			Pending:      t.Pending,
-			DateTime:     t.Date,
-			PlaidCategory1:    s(t.Category, 0),
-			PlaidCategory2:    s(t.Category, 1),
-			PlaidCategory3:    s(t.Category, 2),
-			Address: address,
+			PlaidID:        t.TransactionId,
+			AccountID:      t.AccountId,
+			AccountIDLink:  airtable.RecordLink{t.AccountId},
+			Amount:         t.Amount,
+			Name:           t.Name,
+			MerchantName:   val(t.MerchantName),
+			Pending:        t.Pending,
+			DateTime:       t.Date,
+			PlaidCategory1: s(t.Category, 0),
+			PlaidCategory2: s(t.Category, 1),
+			PlaidCategory3: s(t.Category, 2),
+			Address:        address,
 		}, Typecast: true}
-		plaidTransactions[i].ID = t.ID
+		plaidTransactions[i].ID = t.TransactionId
 	}
 
 	plaidArranged := byAccountIDbyTransactionID(plaidTransactions)
@@ -102,7 +110,7 @@ func Sync(transactions []plaid.Transaction, airtableTransactions []TransactionRe
 			if err != nil {
 				return err
 			}
-			fmt.Printf("Created %d/%d transactions\n", i + 1, len(updates.ToCreate))
+			fmt.Printf("Created %d/%d transactions\n", i+1, len(updates.ToCreate))
 		}
 
 		for i, t := range updates.ToUpdate {
@@ -110,7 +118,7 @@ func Sync(transactions []plaid.Transaction, airtableTransactions []TransactionRe
 			if err != nil {
 				return err
 			}
-			fmt.Printf("Updated %d/%d transactions\n", i + 1, len(updates.ToUpdate))
+			fmt.Printf("Updated %d/%d transactions\n", i+1, len(updates.ToUpdate))
 		}
 	}
 
@@ -145,7 +153,7 @@ func updateAccount(plaidTs, airtableTs map[string]TransactionRecord) AccountUpda
 		if !ok {
 			u.ToCreate = append(u.ToCreate, t)
 		} else if existing.Fields.Pending != t.Fields.Pending ||
-		        existing.Fields.Address != t.Fields.Address {
+			existing.Fields.Address != t.Fields.Address {
 			t.ID = existing.ID
 			u.ToUpdate = append(u.ToUpdate, t)
 		}
@@ -234,5 +242,3 @@ func FixAT(airtableTransactions []TransactionRecord) error {
 
 	return nil
 }
-
-

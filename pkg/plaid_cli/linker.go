@@ -1,6 +1,7 @@
 package plaid_cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -9,7 +10,7 @@ import (
 	"sync"
 	"text/template"
 
-	"github.com/plaid/plaid-go/plaid"
+	"github.com/plaid/plaid-go/v27/plaid"
 	"github.com/skratchdot/open-golang/open"
 )
 
@@ -17,9 +18,9 @@ type Linker struct {
 	Results       chan string
 	RelinkResults chan bool
 	Errors        chan error
-	Client        *plaid.Client
+	Client        *plaid.APIClient
 	Data          *Data
-	countries     []string
+	countries     []plaid.CountryCode
 	lang          string
 
 	mu sync.Mutex
@@ -30,53 +31,65 @@ type TokenPair struct {
 	AccessToken string
 }
 
-func (l *Linker) Relink(itemID string, port string) error {
+func (l *Linker) Relink(ctx context.Context, itemID string, port string) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	log.Println("Starting relink server for %s", itemID)
+	log.Printf("Starting relink server for %s\n", itemID)
 	token := l.Data.Tokens[itemID]
 	hostname, err := os.Hostname()
 	if err != nil {
 		log.Fatal(err)
 	}
-	resp, err := l.Client.CreateLinkToken(plaid.LinkTokenConfigs{
-		User: &plaid.LinkTokenUser{
-			ClientUserID: hostname,
-		},
-		ClientName:   "plaid-cli",
-		CountryCodes: l.countries,
-		Language:     l.lang,
-		AccessToken:  token,
-	})
+	resp, httpResp, err := l.Client.PlaidApi.LinkTokenCreate(ctx).LinkTokenCreateRequest(
+		plaid.LinkTokenCreateRequest{
+			User: plaid.LinkTokenCreateRequestUser{
+				ClientUserId: hostname,
+			},
+			ClientName:   "plaid-cli",
+			CountryCodes: l.countries,
+			Language:     l.lang,
+			AccessToken:  *plaid.NewNullableString(&token),
+			Transactions: &plaid.LinkTokenTransactions{
+				DaysRequested: plaid.PtrInt32(365),
+			},
+		}).Execute()
 	if err != nil {
+		log.Print(resp)
+		log.Print(httpResp)
 		log.Fatal(err)
 	}
 	return l.relink(port, resp.LinkToken)
 }
 
-func (l *Linker) Link(port string) (*TokenPair, error) {
+func (l *Linker) Link(ctx context.Context, port string) (*TokenPair, error) {
 	hostname, err := os.Hostname()
 	if err != nil {
 		log.Fatal(err)
 	}
-	resp, err := l.Client.CreateLinkToken(plaid.LinkTokenConfigs{
-		User: &plaid.LinkTokenUser{
-			ClientUserID: hostname,
-		},
-		ClientName:   "plaid-cli",
-		Products:     []string{"transactions"},
-		CountryCodes: l.countries,
-		Language:     l.lang,
-	})
+	resp, httpResp, err := l.Client.PlaidApi.LinkTokenCreate(ctx).LinkTokenCreateRequest(
+		plaid.LinkTokenCreateRequest{
+			User: plaid.LinkTokenCreateRequestUser{
+				ClientUserId: hostname,
+			},
+			ClientName:   "plaid-cli",
+			Products:     []plaid.Products{"transactions"},
+			CountryCodes: l.countries,
+			Language:     l.lang,
+			Transactions: &plaid.LinkTokenTransactions{
+				DaysRequested: plaid.PtrInt32(365),
+			},
+		}).Execute()
 	if err != nil {
+		log.Print(resp)
+		log.Print(httpResp)
 		log.Fatal(err)
 	}
-	return l.link(port, resp.LinkToken)
+	return l.link(ctx, port, resp.LinkToken)
 }
 
-func (l *Linker) link(port string, linkToken string) (*TokenPair, error) {
-	log.Println(fmt.Sprintf("Starting Plaid Link on port %s...", port))
+func (l *Linker) link(ctx context.Context, port string, linkToken string) (*TokenPair, error) {
+	log.Printf("Starting Plaid Link on port %s...\n", port)
 
 	go func() {
 		http.HandleFunc("/link", handleLink(l, linkToken))
@@ -87,7 +100,7 @@ func (l *Linker) link(port string, linkToken string) (*TokenPair, error) {
 	}()
 
 	url := fmt.Sprintf("http://localhost:%s/link", port)
-	log.Println(fmt.Sprintf("Your browser should open automatically. If it doesn't, please visit %s to continue linking!", url))
+	log.Printf("Your browser should open automatically. If it doesn't, please visit %s to continue linking!\n", url)
 	open.Run(url)
 
 	select {
@@ -95,13 +108,13 @@ func (l *Linker) link(port string, linkToken string) (*TokenPair, error) {
 		return nil, err
 	case publicToken := <-l.Results:
 
-		res, err := l.exchange(publicToken)
+		res, err := l.exchange(ctx, publicToken)
 		if err != nil {
 			return nil, err
 		}
 
 		pair := &TokenPair{
-			ItemID:      res.ItemID,
+			ItemID:      res.ItemId,
 			AccessToken: res.AccessToken,
 		}
 
@@ -110,7 +123,7 @@ func (l *Linker) link(port string, linkToken string) (*TokenPair, error) {
 }
 
 func (l *Linker) relink(port string, linkToken string) error {
-	log.Println(fmt.Sprintf("Starting Plaid Link on port %s...", port))
+	log.Printf("Starting Plaid Link on port %s...\n", port)
 
 	go func() {
 		http.HandleFunc("/relink", handleRelink(l, linkToken))
@@ -121,7 +134,7 @@ func (l *Linker) relink(port string, linkToken string) error {
 	}()
 
 	url := fmt.Sprintf("http://localhost:%s/relink", port)
-	log.Println(fmt.Sprintf("Your browser should open automatically. If it doesn't, please visit %s to continue linking!", url))
+	log.Printf("Your browser should open automatically. If it doesn't, please visit %s to continue linking!\n", url)
 	open.Run(url)
 
 	select {
@@ -132,11 +145,14 @@ func (l *Linker) relink(port string, linkToken string) error {
 	}
 }
 
-func (l *Linker) exchange(publicToken string) (plaid.ExchangePublicTokenResponse, error) {
-	return l.Client.ExchangePublicToken(publicToken)
+func (l *Linker) exchange(ctx context.Context, publicToken string) (plaid.ItemPublicTokenExchangeResponse, error) {
+	resp, _, err := l.Client.PlaidApi.ItemPublicTokenExchange(ctx).ItemPublicTokenExchangeRequest(plaid.ItemPublicTokenExchangeRequest{
+		PublicToken: publicToken,
+	}).Execute()
+	return resp, err
 }
 
-func NewLinker(data *Data, client *plaid.Client, countries []string, lang string) *Linker {
+func NewLinker(data *Data, client *plaid.APIClient, countries []plaid.CountryCode, lang string) *Linker {
 	return &Linker{
 		Results:       make(chan string),
 		RelinkResults: make(chan bool),

@@ -2,23 +2,24 @@ package main
 
 import (
 	"fmt"
-	"github.com/brianloveswords/airtable"
-	"github.com/plaid/plaid-go/plaid"
 	"os"
+
+	"github.com/brianloveswords/airtable"
+	"github.com/plaid/plaid-go/v27/plaid"
 )
 
 type AccountFields struct {
-	AccountID    string
-	Name         string
-	Mask		string
+	AccountID string
+	Name      string
+	Mask      string
 }
 
 type AccountRecord struct {
 	airtable.Record
-	Fields   AccountFields
+	Fields AccountFields
 }
 
-func SyncAccounts(accounts []plaid.Account) error {
+func SyncAccounts(accounts []plaid.AccountBase) error {
 	client := airtable.Client{
 		APIKey: os.Getenv("AIRTABLE_KEY"),
 		BaseID: "appxCfKnRz94NZadj",
@@ -28,14 +29,14 @@ func SyncAccounts(accounts []plaid.Account) error {
 
 	plaidAccounts := make([]AccountRecord, len(accounts))
 	for i, a := range accounts {
-		name := a.OfficialName
+		name := val(a.OfficialName)
 		if name == "" {
 			name = a.Name
 		}
 		plaidAccounts[i] = AccountRecord{Fields: AccountFields{
-			AccountID:    a.AccountID,
-			Name:         name,
-			Mask: a.Mask,
+			AccountID: a.AccountId,
+			Name:      name,
+			Mask:      val(a.Mask),
 		}}
 	}
 
@@ -63,4 +64,3 @@ func SyncAccounts(accounts []plaid.Account) error {
 
 	return nil
 }
-
